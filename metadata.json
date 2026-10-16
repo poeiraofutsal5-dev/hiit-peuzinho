@@ -1,0 +1,6 @@
+{
+  "name": "PULSE - HIIT & Corrida GPS",
+  "description": "Aplicativo minimalista e sem anúncios para treinos HIIT/Tabata, rastreamento de corrida por GPS em tempo real e gerador de stories elegante estilo Strava.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
