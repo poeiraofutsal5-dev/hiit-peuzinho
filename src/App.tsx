@@ -32,10 +32,21 @@ export default function App() {
     setActiveTab('story');
   };
 
+  const handleTabChange = (tab: 'gps' | 'hiit' | 'history' | 'story') => {
+    if (tab === 'story') {
+      const stored = getStoredWorkouts();
+      if (stored.length > 0) {
+        // Always default to most recent workout if current is null or out of date
+        setStoryWorkout((curr) => curr || stored[0]);
+      }
+    }
+    setActiveTab(tab);
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#0B0F17] text-slate-100 font-sans pb-16 md:pb-0">
       {/* Top Navbar */}
-      <Navbar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <Navbar activeTab={activeTab} onSelectTab={handleTabChange} />
 
       {/* Main Content Area */}
       <main className="flex-1 w-full">
@@ -70,7 +81,7 @@ export default function App() {
       </main>
 
       {/* Ergonomic Mobile Bottom Tab Navigation */}
-      <BottomTabBar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <BottomTabBar activeTab={activeTab} onSelectTab={handleTabChange} />
     </div>
   );
 }

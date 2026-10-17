@@ -91,6 +91,8 @@ export function estimateCalories(distanceMeters: number, durationSeconds: number
 /**
  * Normalizes an array of GPS coordinates to fit perfectly inside an SVG / Canvas bounding box
  * for rendering the Strava-style route shape regardless of GPS coordinates location.
+ * Accurately handles straight line routes (north-south, east-west, diagonal) without distortion
+ * or magnifying microscopic GPS jitter.
  */
 export function projectCoordinatesToCanvas(
   coordinates: GPSCoordinate[],
@@ -98,7 +100,7 @@ export function projectCoordinatesToCanvas(
   height: number,
   padding: number = 30
 ): { x: number; y: number }[] {
-  if (coordinates.length === 0) return [];
+  if (!coordinates || coordinates.length === 0) return [];
   if (coordinates.length === 1) return [{ x: width / 2, y: height / 2 }];
 
   let minLat = Infinity;
@@ -106,28 +108,57 @@ export function projectCoordinatesToCanvas(
   let minLng = Infinity;
   let maxLng = -Infinity;
 
-  coordinates.forEach((c) => {
+  for (const c of coordinates) {
     if (c.lat < minLat) minLat = c.lat;
     if (c.lat > maxLat) maxLat = c.lat;
     if (c.lng < minLng) minLng = c.lng;
     if (c.lng > maxLng) maxLng = c.lng;
-  });
+  }
 
-  const latSpan = maxLat - minLat || 0.0001;
-  const lngSpan = maxLng - minLng || 0.0001;
+  const rawLatSpan = maxLat - minLat;
+  const rawLngSpan = maxLng - minLng;
 
-  // Preserve aspect ratio
-  const drawWidth = width - padding * 2;
-  const drawHeight = height - padding * 2;
+  // Cosine of mean latitude for true spherical projection to flat canvas
+  const meanLat = (minLat + maxLat) / 2;
+  const cosLat = Math.max(0.2, Math.cos((meanLat * Math.PI) / 180));
 
-  // Note: Latitude increases north (up), so Canvas Y should be inverted
-  const scale = Math.min(drawWidth / lngSpan, drawHeight / latSpan);
-  const xOffset = padding + (drawWidth - lngSpan * scale) / 2;
-  const yOffset = padding + (drawHeight - latSpan * scale) / 2;
+  // Convert raw angular span to approximate meters (1 deg lat ~ 111,139m)
+  const METERS_PER_DEG_LAT = 111139;
+  const METERS_PER_DEG_LNG = 111139 * cosLat;
+
+  const latMeters = rawLatSpan * METERS_PER_DEG_LAT;
+  const lngMeters = rawLngSpan * METERS_PER_DEG_LNG;
+
+  // If total displacement is minimal (e.g. user moved very little or stood still),
+  // avoid division by zero or jitter explosion.
+  const maxDisplacementMeters = Math.max(latMeters, lngMeters);
+  const minThresholdMeters = 8; // At least 8 meters of spatial dimension
+
+  // Determine effective metric spans preserving true geographical aspect ratio
+  const effectiveLatMeters = Math.max(latMeters, maxDisplacementMeters > minThresholdMeters ? 0.0001 : minThresholdMeters);
+  const effectiveLngMeters = Math.max(lngMeters, maxDisplacementMeters > minThresholdMeters ? 0.0001 : minThresholdMeters);
+
+  // Available drawing area
+  const drawWidth = Math.max(10, width - padding * 2);
+  const drawHeight = Math.max(10, height - padding * 2);
+
+  // Calculate scale preserving isotropic (1:1) physical aspect ratio
+  const scale = Math.min(
+    drawWidth / (effectiveLngMeters || 1),
+    drawHeight / (effectiveLatMeters || 1)
+  );
+
+  const contentWidth = effectiveLngMeters * scale;
+  const contentHeight = effectiveLatMeters * scale;
+
+  const xOffset = padding + (drawWidth - contentWidth) / 2;
+  const yOffset = padding + (drawHeight - contentHeight) / 2;
 
   return coordinates.map((c) => {
-    const x = xOffset + (c.lng - minLng) * scale;
-    const y = yOffset + (maxLat - c.lat) * scale; // Inverted latitude
+    const xDistMeters = (c.lng - minLng) * METERS_PER_DEG_LNG;
+    const yDistMeters = (maxLat - c.lat) * METERS_PER_DEG_LAT; // Inverted latitude (North is up)
+    const x = xOffset + xDistMeters * scale;
+    const y = yOffset + yDistMeters * scale;
     return { x, y };
   });
 }

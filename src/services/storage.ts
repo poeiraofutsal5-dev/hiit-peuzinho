@@ -114,6 +114,12 @@ export function calculateWeeklyStats(workouts: Workout[]): WeeklyStats {
         const gpsW = w as GPSWorkout;
         km = gpsW.distanceMeters / 1000;
         totalKm += km;
+      } else if (w.type === 'hiit') {
+        const hiitW = w as HIITWorkout;
+        if (hiitW.distanceMeters && hiitW.distanceMeters > 0) {
+          km = hiitW.distanceMeters / 1000;
+          totalKm += km;
+        }
       }
 
       if (dailyMap[dayLabel]) {

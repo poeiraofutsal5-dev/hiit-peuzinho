@@ -33,6 +33,10 @@ export interface HIITWorkout extends BaseWorkout {
   workSeconds: number;
   restSeconds: number;
   sets: number;
+  coordinates?: GPSCoordinate[];
+  distanceMeters?: number;
+  avgPaceSecondsPerKm?: number;
+  maxSpeedKmh?: number;
 }
 
 export type Workout = GPSWorkout | HIITWorkout;

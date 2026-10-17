@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Download, Share2, Upload, Image as ImageIcon, Sliders, ChevronLeft, Check, Sparkles, Type, Edit3 } from 'lucide-react';
-import { Workout, GPSWorkout, HIITWorkout } from '../types/workout';
+import { Workout, GPSWorkout, HIITWorkout, GPSCoordinate } from '../types/workout';
 import { formatDurationStory, formatPaceShort, projectCoordinatesToCanvas } from '../utils/geo';
-import { SAMPLE_ROUTE_COORDS, getStoredWorkouts } from '../services/storage';
+import { getStoredWorkouts } from '../services/storage';
 
 interface StoryGeneratorProps {
   workout: Workout | null;
@@ -31,11 +31,13 @@ export const StoryGenerator: React.FC<StoryGeneratorProps> = ({ workout: initial
   const [availableWorkouts, setAvailableWorkouts] = useState<Workout[]>([]);
   const [selectedWorkout, setSelectedWorkout] = useState<Workout | null>(initialWorkout);
 
-  // Load workouts on mount
+  // Load workouts on mount and sync whenever initialWorkout changes
   useEffect(() => {
     const list = getStoredWorkouts();
     setAvailableWorkouts(list);
-    if (!initialWorkout && list.length > 0) {
+    if (initialWorkout) {
+      setSelectedWorkout(initialWorkout);
+    } else if (!selectedWorkout && list.length > 0) {
       setSelectedWorkout(list[0]);
     }
   }, [initialWorkout]);
@@ -67,10 +69,16 @@ export const StoryGenerator: React.FC<StoryGeneratorProps> = ({ workout: initial
     if (selectedWorkout) {
       const isRun = selectedWorkout.type === 'running' || selectedWorkout.type === 'cycling' || selectedWorkout.type === 'walking';
       const gps = isRun ? (selectedWorkout as GPSWorkout) : null;
+      const hiit = selectedWorkout.type === 'hiit' ? (selectedWorkout as HIITWorkout) : null;
+
       if (gps && gps.distanceMeters > 0) {
         setCustomDistance((gps.distanceMeters / 1000).toFixed(2).replace('.', ',') + ' km');
         setCustomPace(gps.avgPaceSecondsPerKm > 0 ? formatPaceShort(gps.avgPaceSecondsPerKm) : '0:00 /km');
         setCustomDuration(formatDurationStory(gps.durationSeconds));
+      } else if (hiit && hiit.distanceMeters && hiit.distanceMeters > 0) {
+        setCustomDistance((hiit.distanceMeters / 1000).toFixed(2).replace('.', ',') + ' km');
+        setCustomPace(hiit.avgPaceSecondsPerKm && hiit.avgPaceSecondsPerKm > 0 ? formatPaceShort(hiit.avgPaceSecondsPerKm) : '0:00 /km');
+        setCustomDuration(formatDurationStory(hiit.durationSeconds));
       } else {
         setCustomDistance('0,00 km');
         setCustomPace('0:00 /km');
@@ -87,8 +95,8 @@ export const StoryGenerator: React.FC<StoryGeneratorProps> = ({ workout: initial
   const [backgroundImageUrl, setBackgroundImageUrl] = useState<string>(PRESET_BACKGROUNDS[0].url);
   const [blurAmount, setBlurAmount] = useState<number>(14); // in px
   const [dimAmount, setDimAmount] = useState<number>(35); // in %
-  const [brandStyle, setBrandStyle] = useState<'PULSE' | 'NONE' | 'CUSTOM'>('PULSE');
-  const [customBrandText, setCustomBrandText] = useState<string>('PULSE');
+  const [brandStyle, setBrandStyle] = useState<'JPX MOTION' | 'NONE' | 'CUSTOM'>('JPX MOTION');
+  const [customBrandText, setCustomBrandText] = useState<string>('JPX MOTION');
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportSuccess, setExportSuccess] = useState<boolean>(false);
 
@@ -224,70 +232,109 @@ export const StoryGenerator: React.FC<StoryGeneratorProps> = ({ workout: initial
 
         ctx.restore();
 
-        // 4. Render Orange Route Silhouette (O Trajeto)
+        // 4. Render Orange Route Silhouette (O Trajeto Real)
         // Positioned safely between y = height * 0.52 and height * 0.77
         ctx.save();
         const routeWidth = width * 0.58;
         const routeHeight = height * 0.20;
         const routeCenterY = height * 0.65;
 
-        // Choose coordinates: if workout has real coordinates (>= 2 points), use them.
-        // If not (e.g. 2s test), use the scenic loop SAMPLE_ROUTE_COORDS so it's always an authentic route!
-        const rawCoords = gpsWorkout?.coordinates && gpsWorkout.coordinates.length >= 2
-          ? gpsWorkout.coordinates
-          : SAMPLE_ROUTE_COORDS;
+        // Retrieve real recorded coordinates strictly from the user's workout
+        const candidateCoords = (selectedWorkout as any)?.coordinates as GPSCoordinate[] | undefined;
+        const hasRealCoords = candidateCoords && Array.isArray(candidateCoords) && candidateCoords.length > 0;
 
-        const projectedPoints = projectCoordinatesToCanvas(
-          rawCoords,
-          routeWidth,
-          routeHeight,
-          Math.round(20 * scale)
-        );
+        if (hasRealCoords && candidateCoords.length > 1) {
+          const projectedPoints = projectCoordinatesToCanvas(
+            candidateCoords,
+            routeWidth,
+            routeHeight,
+            Math.round(20 * scale)
+          );
 
-        if (projectedPoints.length > 1) {
-          const offsetX = (width - routeWidth) / 2;
-          const offsetY = routeCenterY - routeHeight / 2;
+          if (projectedPoints.length > 1) {
+            const offsetX = (width - routeWidth) / 2;
+            const offsetY = routeCenterY - routeHeight / 2;
 
-          ctx.translate(offsetX, offsetY);
+            ctx.translate(offsetX, offsetY);
 
-          // Strava-inspired vibrant electric orange line with soft glow
-          ctx.strokeStyle = '#FC5200';
-          ctx.lineWidth = Math.max(4, Math.round(14 * scale));
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.shadowColor = 'rgba(252, 82, 0, 0.45)';
-          ctx.shadowBlur = 16 * scale;
+            // Strava-inspired vibrant electric orange line with soft glow
+            ctx.strokeStyle = '#FC5200';
+            ctx.lineWidth = Math.max(4, Math.round(14 * scale));
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.shadowColor = 'rgba(252, 82, 0, 0.45)';
+            ctx.shadowBlur = 16 * scale;
 
-          ctx.beginPath();
-          ctx.moveTo(projectedPoints[0].x, projectedPoints[0].y);
-          for (let i = 1; i < projectedPoints.length; i++) {
-            ctx.lineTo(projectedPoints[i].x, projectedPoints[i].y);
+            ctx.beginPath();
+            ctx.moveTo(projectedPoints[0].x, projectedPoints[0].y);
+            for (let i = 1; i < projectedPoints.length; i++) {
+              ctx.lineTo(projectedPoints[i].x, projectedPoints[i].y);
+            }
+            ctx.stroke();
+
+            // Green start marker dot
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#10B981';
+            ctx.beginPath();
+            ctx.arc(projectedPoints[0].x, projectedPoints[0].y, Math.max(3, 8 * scale), 0, Math.PI * 2);
+            ctx.fill();
+
+            // Orange finish marker dot with white border
+            const lastPt = projectedPoints[projectedPoints.length - 1];
+            ctx.fillStyle = '#FC5200';
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = Math.max(2, 4 * scale);
+            ctx.beginPath();
+            ctx.arc(lastPt.x, lastPt.y, Math.max(3, 9 * scale), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
           }
+        } else if (hasRealCoords && candidateCoords.length === 1) {
+          // Single location fix: draw authentic GPS spot pin/radar
+          ctx.translate(width / 2, routeCenterY);
+          ctx.strokeStyle = 'rgba(252, 82, 0, 0.4)';
+          ctx.lineWidth = 2 * scale;
+          ctx.beginPath();
+          ctx.arc(0, 0, 36 * scale, 0, Math.PI * 2);
           ctx.stroke();
 
-          // Green start marker dot
-          ctx.shadowBlur = 0;
-          ctx.fillStyle = '#10B981';
+          ctx.fillStyle = '#FC5200';
           ctx.beginPath();
-          ctx.arc(projectedPoints[0].x, projectedPoints[0].y, Math.max(3, 8 * scale), 0, Math.PI * 2);
+          ctx.arc(0, 0, 12 * scale, 0, Math.PI * 2);
           ctx.fill();
 
-          // Orange finish marker dot with white border
-          const lastPt = projectedPoints[projectedPoints.length - 1];
-          ctx.fillStyle = '#FC5200';
-          ctx.strokeStyle = '#FFFFFF';
-          ctx.lineWidth = Math.max(2, 4 * scale);
+          ctx.fillStyle = '#FFFFFF';
           ctx.beginPath();
-          ctx.arc(lastPt.x, lastPt.y, Math.max(3, 9 * scale), 0, Math.PI * 2);
+          ctx.arc(0, 0, 5 * scale, 0, Math.PI * 2);
           ctx.fill();
+        } else {
+          // If no GPS coordinates were captured (or non-GPS activity like HIIT),
+          // draw an aesthetic minimalist telemetry pulse wave instead of any fake/random circuit
+          ctx.translate(width / 2, routeCenterY);
+          ctx.strokeStyle = '#FC5200';
+          ctx.lineWidth = Math.max(3, Math.round(8 * scale));
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.shadowColor = 'rgba(252, 82, 0, 0.5)';
+          ctx.shadowBlur = 12 * scale;
+
+          ctx.beginPath();
+          const pW = width * 0.45;
+          ctx.moveTo(-pW / 2, 0);
+          ctx.lineTo(-pW * 0.2, 0);
+          ctx.lineTo(-pW * 0.1, -18 * scale);
+          ctx.lineTo(0, 22 * scale);
+          ctx.lineTo(pW * 0.1, -26 * scale);
+          ctx.lineTo(pW * 0.2, 0);
+          ctx.lineTo(pW / 2, 0);
           ctx.stroke();
         }
 
         ctx.restore();
 
-        // 5. Brand Logo Wordmark (NO STRAVA - Uses PULSE or Custom or None)
+        // 5. Brand Logo Wordmark (NO STRAVA - Uses JPX MOTION or Custom or None)
         if (brandStyle !== 'NONE') {
-          const brandText = brandStyle === 'CUSTOM' ? (customBrandText.trim() || 'PULSE') : 'PULSE';
+          const brandText = brandStyle === 'CUSTOM' ? (customBrandText.trim() || 'JPX MOTION') : 'JPX MOTION';
 
           ctx.save();
           ctx.textAlign = 'center';
@@ -555,14 +602,14 @@ export const StoryGenerator: React.FC<StoryGeneratorProps> = ({ workout: initial
             </span>
             <div className="grid grid-cols-3 gap-2">
               <button
-                onClick={() => setBrandStyle('PULSE')}
+                onClick={() => setBrandStyle('JPX MOTION')}
                 className={`py-2 rounded-xl text-center text-xs font-black tracking-widest border transition-all cursor-pointer ${
-                  brandStyle === 'PULSE'
+                  brandStyle === 'JPX MOTION'
                     ? 'border-orange-500 bg-orange-500/10 text-orange-400'
                     : 'border-slate-800 bg-[#161D2D] text-slate-400 hover:text-white'
                 }`}
               >
-                PULSE
+                JPX MOTION
               </button>
               <button
                 onClick={() => setBrandStyle('NONE')}

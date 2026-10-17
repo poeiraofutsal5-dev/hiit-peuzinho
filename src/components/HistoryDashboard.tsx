@@ -264,12 +264,22 @@ export const HistoryDashboard: React.FC<HistoryDashboardProps> = ({
                           </div>
                         </>
                       ) : (
-                        <div>
-                          <span className="text-xs font-bold text-white tabular-nums">
-                            {hiit?.roundsCompleted} rounds
-                          </span>
-                          <span className="text-[10px] text-slate-400 block">Intervalos</span>
-                        </div>
+                        <>
+                          {hiit?.distanceMeters && hiit.distanceMeters > 0 ? (
+                            <div>
+                              <span className="text-xs font-bold text-white tabular-nums">
+                                {(hiit.distanceMeters / 1000).toFixed(2)} km
+                              </span>
+                              <span className="text-[10px] text-slate-400 block">Trajeto</span>
+                            </div>
+                          ) : null}
+                          <div>
+                            <span className="text-xs font-bold text-white tabular-nums">
+                              {hiit?.roundsCompleted} rounds
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">Intervalos</span>
+                          </div>
+                        </>
                       )}
 
                       <div>

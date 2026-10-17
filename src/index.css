@@ -27,11 +27,21 @@
   padding-top: env(safe-area-inset-top, 16px);
 }
 
-/* Leaflet dark theme customizations */
+/* Leaflet theme customizations */
 .leaflet-container {
   background: #0B0F17 !important;
   outline: none;
   font-family: var(--font-sans) !important;
+}
+
+/* Dark mode filter for standard OpenStreetMap tiles (eliminates Carto watermark) */
+.leaflet-tile-pane.dark-tiles img {
+  filter: brightness(0.6) invert(1) contrast(2.6) hue-rotate(195deg) saturate(0.25) brightness(0.9) !important;
+}
+
+/* Clean satellite & street tiles */
+.leaflet-tile-pane.satellite-tiles img {
+  filter: brightness(0.85) contrast(1.15) !important;
 }
 
 .leaflet-control-zoom {

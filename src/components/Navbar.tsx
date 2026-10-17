@@ -28,10 +28,10 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab }) => {
             className="flex items-center gap-2 cursor-pointer group"
           >
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#FC5200] to-orange-400 flex items-center justify-center shadow-md shadow-orange-500/20 group-hover:scale-105 transition-transform">
-              <span className="font-black text-white text-xs tracking-wider">P</span>
+              <span className="font-black text-white text-[11px] tracking-tighter">JPX</span>
             </div>
             <span className="text-lg font-black tracking-tight text-white whitespace-nowrap shrink-0">
-              PULSE<span className="text-[#FC5200]">.</span>
+              JPX MOTION<span className="text-[#FC5200]">.</span>
             </span>
           </div>
         </div>
