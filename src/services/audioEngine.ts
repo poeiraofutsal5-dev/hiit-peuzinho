@@ -273,6 +273,28 @@ class AudioEngine {
 
   private silentAudioEl: HTMLAudioElement | null = null;
   private isKeepAliveRunning: boolean = false;
+  private onHeartbeatCallback: (() => void) | null = null;
+  private lastHeartbeatTime: number = 0;
+  private scriptProcessor: ScriptProcessorNode | null = null;
+  private worker: Worker | null = null;
+
+  public setHeartbeatCallback(cb: (() => void) | null) {
+    this.onHeartbeatCallback = cb;
+  }
+
+  private triggerHeartbeat() {
+    if (!this.isKeepAliveRunning || !this.onHeartbeatCallback) return;
+    const now = Date.now();
+    // Fire heartbeat roughly every 1.5s to keep GPS hardware active without overloading
+    if (now - this.lastHeartbeatTime >= 1500) {
+      this.lastHeartbeatTime = now;
+      try {
+        this.onHeartbeatCallback();
+      } catch (err) {
+        console.warn('Heartbeat callback error:', err);
+      }
+    }
+  }
 
   /**
    * Generates a 10-second inaudible 8-bit PCM silent WAV data URL.
@@ -315,14 +337,18 @@ class AudioEngine {
    * Starts persistent mobile background running keep-alive:
    * 1. Plays a continuous HTML5 silent audio loop.
    * 2. Registers Media Session API on Android/iOS lock screens.
-   * This prevents mobile operating systems (iOS Safari and Android Chrome)
-   * from freezing JavaScript and GPS tracking when the screen turns off.
+   * 3. Uses audio timeupdate + Web Audio ScriptProcessor + Web Worker
+   *    to keep GPS polling active every 1.5s when the screen is turned off.
    */
   public startKeepAlive(
     activityTitle: string = 'Corrida com GPS',
-    onTogglePause?: () => void
+    onTogglePause?: () => void,
+    onBackgroundHeartbeat?: () => void
   ) {
     this.isKeepAliveRunning = true;
+    if (onBackgroundHeartbeat) {
+      this.onHeartbeatCallback = onBackgroundHeartbeat;
+    }
 
     try {
       this.initContext();
@@ -339,6 +365,10 @@ class AudioEngine {
             audio.play().catch(() => {});
           }
         });
+        // Audio timeupdate fires continuously (3-4 times/sec) even when screen is locked
+        audio.addEventListener('timeupdate', () => {
+          this.triggerHeartbeat();
+        });
         this.silentAudioEl = audio;
       }
 
@@ -346,20 +376,56 @@ class AudioEngine {
         // Auto-play policy handled on user tap
       });
 
-      // Keep Web Audio context alive with a sub-audible periodic ping to prevent Chrome timer throttling
+      // Web Audio ScriptProcessorNode runs on the native hardware audio clock
+      // This is immune to main-thread timer freezing when screen turns off
       if (this.ctx) {
         try {
-          const osc = this.ctx.createOscillator();
-          const gain = this.ctx.createGain();
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(1, this.ctx.currentTime); // 1Hz sub-audible
-          gain.gain.setValueAtTime(0.00001, this.ctx.currentTime); // virtually 0
-          osc.connect(gain);
-          gain.connect(this.ctx.destination);
-          osc.start();
-        } catch {
-          // Ignore
+          if (this.scriptProcessor) {
+            try { this.scriptProcessor.disconnect(); } catch {}
+          }
+          const sp = this.ctx.createScriptProcessor(4096, 1, 1);
+          sp.onaudioprocess = () => {
+            this.triggerHeartbeat();
+          };
+          const zeroGain = this.ctx.createGain();
+          zeroGain.gain.setValueAtTime(0, this.ctx.currentTime);
+          sp.connect(zeroGain);
+          zeroGain.connect(this.ctx.destination);
+          this.scriptProcessor = sp;
+        } catch (err) {
+          console.warn('ScriptProcessor background ticker setup:', err);
         }
+      }
+
+      // Inline Web Worker ticker: Worker timers are not throttled when audio is playing
+      try {
+        if (!this.worker && typeof window !== 'undefined' && 'Worker' in window) {
+          const workerCode = `
+            let timer = null;
+            self.onmessage = function(e) {
+              if (e.data === 'start') {
+                if (timer) clearInterval(timer);
+                timer = setInterval(function() {
+                  self.postMessage('tick');
+                }, 1500);
+              } else if (e.data === 'stop') {
+                if (timer) clearInterval(timer);
+                timer = null;
+              }
+            };
+          `;
+          const blob = new Blob([workerCode], { type: 'application/javascript' });
+          const workerUrl = URL.createObjectURL(blob);
+          this.worker = new Worker(workerUrl);
+          this.worker.onmessage = () => {
+            this.triggerHeartbeat();
+          };
+        }
+        if (this.worker) {
+          this.worker.postMessage('start');
+        }
+      } catch (err) {
+        console.warn('Background worker ticker setup:', err);
       }
 
       // Register Media Session API for mobile lock screen
@@ -445,6 +511,25 @@ class AudioEngine {
 
   public stopKeepAlive() {
     this.isKeepAliveRunning = false;
+    this.onHeartbeatCallback = null;
+
+    if (this.worker) {
+      try {
+        this.worker.postMessage('stop');
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (this.scriptProcessor) {
+      try {
+        this.scriptProcessor.disconnect();
+      } catch {
+        // Ignore
+      }
+      this.scriptProcessor = null;
+    }
+
     if (this.silentAudioEl) {
       try {
         this.silentAudioEl.pause();

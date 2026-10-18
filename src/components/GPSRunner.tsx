@@ -48,7 +48,7 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
   const [isPocketMode, setIsPocketMode] = useState<boolean>(false);
   const [showIosTip, setShowIosTip] = useState<boolean>(() => {
     if (typeof navigator === 'undefined') return false;
-    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   });
 
   // Keep screen awake while workout is running
@@ -72,6 +72,7 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
   const lastSimTimestampRef = useRef<number>(0);
   const distanceMetersRef = useRef<number>(0);
   const coordinatesRef = useRef<GPSCoordinate[]>([]);
+  const isGpsQueryInFlightRef = useRef<boolean>(false);
 
   // Initialize Leaflet Map
   useEffect(() => {
@@ -247,7 +248,7 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
     };
   }, [status, updateElapsed]);
 
-  // Centralized coordinate processor with physics-based speed filter & sleep catch-up
+  // Centralized coordinate processor with physics-based speed filter & true curve fidelity
   const handleNewCoord = useCallback((
     lat: number,
     lng: number,
@@ -271,36 +272,27 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
       const calculatedSpeedKmh = (addedMeters / deltaSeconds) * 3.6;
 
       // Filter:
-      // 1. Ignore micro-jitter when stationary (< 1.2m)
-      // 2. Reject impossible physical spikes (> 130 km/h) only if interval is under 60s
-      const isJitter = addedMeters < 1.2;
-      const isTeleportGlitch = calculatedSpeedKmh > 130 && deltaSeconds < 60;
+      // 1. Ignore micro-jitter when stationary (< 1.0m)
+      // 2. Reject impossible physical spikes (> 130 km/h) only if interval is under 30s
+      const isJitter = addedMeters < 1.0;
+      const isTeleportGlitch = calculatedSpeedKmh > 130 && deltaSeconds < 30;
 
       if (!isJitter && !isTeleportGlitch) {
-        // If device was asleep or locked (gap > 8s and distance > 8m),
-        // interpolate intermediate points along the straight segment so the route stays continuous
-        if (deltaSeconds > 8 && addedMeters > 8) {
-          const numSteps = Math.min(6, Math.max(2, Math.floor(addedMeters / 15)));
-          for (let i = 1; i < numSteps; i++) {
-            const fraction = i / numSteps;
-            const interpLat = lastCoordRef.current.lat + (lat - lastCoordRef.current.lat) * fraction;
-            const interpLng = lastCoordRef.current.lng + (lng - lastCoordRef.current.lng) * fraction;
-            const interpTs = Math.round(lastTs + (currentTimestamp - lastTs) * fraction);
-            coordinatesRef.current.push({
-              lat: interpLat,
-              lng: interpLng,
-              speed: calculatedSpeedKmh / 3.6,
-              timestamp: interpTs,
-            });
-          }
-        }
-
+        // Record true GPS coordinate - preserve all curves and turns!
         distanceMetersRef.current += addedMeters;
         coordinatesRef.current.push(newCoord);
 
         setDistanceMeters(distanceMetersRef.current);
         setCoordinates([...coordinatesRef.current]);
         lastCoordRef.current = newCoord;
+
+        // Immediately update Leaflet polyline and marker in real time
+        if (polylineRef.current) {
+          polylineRef.current.addLatLng([lat, lng]);
+        }
+        if (markerRef.current) {
+          markerRef.current.setLatLng([lat, lng]);
+        }
 
         const effectiveSpeedKmh = speed != null && speed > 0 ? speed * 3.6 : calculatedSpeedKmh;
         setCurrentSpeedKmh(Math.max(0, Number(effectiveSpeedKmh.toFixed(1))));
@@ -323,19 +315,73 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
             calories: currentCals,
           });
         }
-      } else if (isTeleportGlitch && deltaSeconds >= 60) {
-        // Device was asleep/locked for over 1 minute: accept new coordinate to resume tracking
+      } else if (isTeleportGlitch && deltaSeconds >= 30) {
+        // Device was asleep/locked: accept new coordinate to resume tracking
         lastCoordRef.current = newCoord;
         coordinatesRef.current.push(newCoord);
         setCoordinates([...coordinatesRef.current]);
+        if (polylineRef.current) {
+          polylineRef.current.addLatLng([lat, lng]);
+        }
       }
     } else {
       // First point
       coordinatesRef.current = [newCoord];
       setCoordinates([newCoord]);
       lastCoordRef.current = newCoord;
+      if (markerRef.current) {
+        markerRef.current.setLatLng([lat, lng]);
+      }
     }
   }, []);
+
+  // Active background & foreground GPS polling function triggered by Audio Keep-Alive / Worker / Intervals
+  const pollBackgroundGps = useCallback(() => {
+    if (status !== 'running' || isSimulating) return;
+
+    // Refresh elapsed time directly from high-precision Date.now() delta
+    updateElapsed();
+
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
+
+    if (!isGpsQueryInFlightRef.current) {
+      isGpsQueryInFlightRef.current = true;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          isGpsQueryInFlightRef.current = false;
+          setGpsError(null);
+          handleNewCoord(
+            pos.coords.latitude,
+            pos.coords.longitude,
+            pos.coords.speed,
+            pos.coords.altitude,
+            pos.timestamp || Date.now()
+          );
+        },
+        (err) => {
+          isGpsQueryInFlightRef.current = false;
+          // Silent fallback since watchPosition is also running
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 4500,
+        }
+      );
+    }
+  }, [status, isSimulating, updateElapsed, handleNewCoord]);
+
+  // Connect AudioEngine background multi-engine heartbeat to GPS polling
+  useEffect(() => {
+    if (status === 'running' && !isSimulating) {
+      soundFx.setHeartbeatCallback(pollBackgroundGps);
+    } else {
+      soundFx.setHeartbeatCallback(null);
+    }
+    return () => {
+      soundFx.setHeartbeatCallback(null);
+    };
+  }, [status, isSimulating, pollBackgroundGps]);
 
   // Dedicated function to start/revive GPS Watch (crucial for iOS WebKit which drops GPS on sleep)
   const startGpsWatch = useCallback(() => {
@@ -372,7 +418,7 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
         {
           enableHighAccuracy: true,
           maximumAge: 0,
-          timeout: 15000,
+          timeout: 10000,
         }
       );
     } catch (err) {
@@ -385,6 +431,16 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         updateElapsed();
+
+        // Refresh polyline with all points recorded while in background
+        if (polylineRef.current && coordinatesRef.current.length > 0) {
+          const latLngs = coordinatesRef.current.map((c) => [c.lat, c.lng] as [number, number]);
+          polylineRef.current.setLatLngs(latLngs);
+        }
+
+        if (markerRef.current && lastCoordRef.current) {
+          markerRef.current.setLatLng([lastCoordRef.current.lat, lastCoordRef.current.lng]);
+        }
 
         if (mapInstanceRef.current) {
           mapInstanceRef.current.invalidateSize();
@@ -413,7 +469,7 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
                 }
               },
               (err) => console.warn('Wake GPS fix error:', err),
-              { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+              { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
             );
           }
         }
@@ -453,19 +509,11 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
     if (status !== 'running' || isSimulating || !('geolocation' in navigator)) return;
 
     const pollInterval = window.setInterval(() => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          handleNewCoord(pos.coords.latitude, pos.coords.longitude, pos.coords.speed, pos.coords.altitude, pos.timestamp);
-        },
-        () => {
-          // Handled by watchPosition
-        },
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 6000 }
-      );
-    }, 4000);
+      pollBackgroundGps();
+    }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [status, isSimulating, handleNewCoord]);
+  }, [status, isSimulating, pollBackgroundGps]);
 
   // Handle Simulation Mode with sleep catch-up
   useEffect(() => {
@@ -550,16 +598,16 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
           pausedAccumulatedMsRef.current += Date.now() - pauseStartRef.current;
           pauseStartRef.current = null;
         }
-        soundFx.startKeepAlive('Corrida com GPS', handleTogglePause);
+        soundFx.startKeepAlive('Corrida com GPS', handleTogglePause, pollBackgroundGps);
         return 'running';
       }
       return curr;
     });
-  }, []);
+  }, [pollBackgroundGps]);
 
   const handleStart = () => {
     soundFx.playStartBurst();
-    soundFx.startKeepAlive('Corrida com GPS', handleTogglePause);
+    soundFx.startKeepAlive('Corrida com GPS', handleTogglePause, pollBackgroundGps);
     if (status === 'idle') {
       startTimeRef.current = Date.now();
       pauseStartRef.current = null;
@@ -766,13 +814,13 @@ export const GPSRunner: React.FC<GPSRunnerProps> = ({ onWorkoutCompleted, onOpen
           </div>
         </div>
 
-        {/* Proactive iPhone guidance banner */}
+        {/* Proactive guidance banner */}
         {showIosTip && status === 'running' && !isPocketMode && (
           <div className="absolute top-16 left-4 right-4 z-20 flex items-center justify-between gap-2 p-3 rounded-xl bg-[#161D2D]/95 border border-orange-500/40 text-orange-200 text-xs backdrop-blur-md shadow-xl animate-in slide-in-from-top duration-300 pointer-events-auto">
             <div className="flex items-center gap-2">
               <Smartphone className="w-4 h-4 text-orange-400 flex-shrink-0" />
               <span>
-                <strong>Dica iPhone:</strong> Use o <strong>Modo Bolso</strong> para o iOS não pausar seu GPS ao guardar o celular!
+                <strong>Curvas Perfeitas:</strong> Use o <strong>Modo Bolso</strong> (tela preta OLED) para o GPS traçar todas as curvas sem o celular suspender o sinal ao desligar a tela!
               </span>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
